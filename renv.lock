@@ -1,0 +1,25 @@
+{
+  "R": {
+    "Version": "4.6.0",
+    "Repositories": [
+      {
+        "Name": "CRAN",
+        "URL": "https://packagemanager.posit.co/cran/__linux__/noble/2026-08-28"
+      }
+    ]
+  },
+  "Packages": {
+    "renv": {
+      "Package": "renv",
+      "Version": "1.2.3",
+      "Source": "Repository",
+      "Repository": "RSPM"
+    },
+    "tinytest": {
+      "Package": "tinytest",
+      "Version": "1.4.3",
+      "Source": "Repository",
+      "Repository": "RSPM"
+    }
+  }
+}

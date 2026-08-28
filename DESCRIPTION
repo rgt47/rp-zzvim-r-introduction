@@ -1,0 +1,12 @@
+Package: rpzzvimrintroduction
+Title: Introducing zzvim-R blog post
+Version: 0.1.0
+Authors@R:
+    person(given = "Ronald G.", family = "Thomas", email = "rgthomas@ucsd.edu", role = c("aut", "cre"))
+Description: Blog post in ZZCOLLAB reproducible research format.
+License: GPL-3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.0
+Suggests:
+    tinytest (>= 1.4.0)

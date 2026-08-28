@@ -1,0 +1,9 @@
+schema=1
+template_version=0.3.0
+r_version=4.6.0
+base_image=rocker/tidyverse:4.6.0
+base_digest=sha256:d00d68ecb138a9f677125f453dd46fd8bbf914866c1cd01c27547403ccc393ce
+ppm_snapshot=2026-08-28
+install_mode=renv
+archetype=
+generated=2026-08-28T19:00:22Z

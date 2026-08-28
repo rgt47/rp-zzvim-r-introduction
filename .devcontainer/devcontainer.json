@@ -1,0 +1,29 @@
+{
+  "name": "rpzzvimrintroduction",
+  "image": "rpzzvimrintroduction",
+  "workspaceFolder": "/home/analyst/project",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/home/analyst/project,type=bind",
+  "mounts": [
+    "source=${env:HOME}/.cache/R/renv,target=/opt/renv/cache,type=bind,consistency=cached"
+  ],
+  "remoteUser": "analyst",
+  "containerEnv": {
+    "ZZCOLLAB_CONTAINER": "true",
+    "ZZCOLLAB_AUTO_RESTORE": "false",
+    "RENV_PATHS_LIBRARY": "/opt/renv/library",
+    "RENV_PATHS_CACHE": "/opt/renv/cache"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "reditorsupport.r",
+        "rdebugger.r-debugger",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "r.rterm.linux": "/usr/local/bin/R",
+        "r.bracketedPaste": true
+      }
+    }
+  }
+}

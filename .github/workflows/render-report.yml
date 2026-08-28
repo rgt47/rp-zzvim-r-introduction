@@ -1,0 +1,285 @@
+# zzcollab render-report.yml v0.3.0
+#
+# Tier 3 (render) for all zzcollab research compendia. Self-adapting: the
+# environment backend is detected at run time from artifact presence, so the
+# same workflow survives toggling Docker on or off without edits.
+#
+#   flake.nix present   -> install Nix and render inside `nix develop` (the
+#                          flake pins the environment, capture level L2).
+#   Dockerfile present  -> build the project image and render inside the
+#                          container (environment pinned, capture level L2).
+#   neither             -> render on the host runner. Packages are restored
+#                          from renv.lock when present (L1), otherwise
+#                          installed from DESCRIPTION via pak (L0).
+#
+# Renders every analysis/**/report.Rmd plus, for the blog archetype, every
+# analysis/posts/*.Rmd. The output format self-adapts to the environment: PDF
+# when a LaTeX engine is present (the verse/publishing base bakes one), HTML
+# otherwise (minimal/tidyverse/rstudio), so the same workflow renders a
+# manuscript PDF for publishing projects and a LaTeX-free HTML elsewhere.
+# Path-filtered to run only when analysis code or the environment definition
+# changes.
+#
+name: Render Reports
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'analysis/**'
+      - 'R/**'
+      - 'DESCRIPTION'
+      - 'renv.lock'
+      - 'Dockerfile'
+      - 'flake.nix'
+      - '.github/workflows/render-report.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'analysis/**'
+      - 'R/**'
+      - 'DESCRIPTION'
+      - 'renv.lock'
+      - 'Dockerfile'
+      - 'flake.nix'
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect environment backend
+        id: mode
+        run: |
+          if [ -f flake.nix ]; then
+            echo "backend=nix" >> "$GITHUB_OUTPUT"
+            echo "Environment: Nix flake"
+          elif [ -f Dockerfile ]; then
+            echo "backend=docker" >> "$GITHUB_OUTPUT"
+            echo "Environment: Docker (Dockerfile present)"
+          else
+            echo "backend=host" >> "$GITHUB_OUTPUT"
+            echo "Environment: host runner"
+          fi
+
+      # --- Nix render: the flake pins the environment; render in `nix develop` ---
+      - name: Install Nix
+        if: steps.mode.outputs.backend == 'nix'
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Render all manuscripts (nix)
+        if: steps.mode.outputs.backend == 'nix'
+        run: |
+          nix develop -c Rscript -e '
+            rmds <- unique(c(
+              list.files("analysis", pattern = "^report[.]Rmd$",
+                         recursive = TRUE, full.names = TRUE),
+              list.files("analysis/posts", pattern = "[.]Rmd$",
+                         full.names = TRUE)
+            ))
+            cat("Found", length(rmds), "manuscripts to render\n\n")
+            failed <- character()
+            for (rmd in rmds) {
+              cat("=== Rendering:", rmd, "===\n")
+              old_wd <- setwd(dirname(rmd))
+              tryCatch(
+                rmarkdown::render(basename(rmd), envir = new.env(), output_format = if (nzchar(Sys.which("pdflatex"))) NULL else "html_document"),
+                error = function(e) {
+                  cat("FAILED:", conditionMessage(e), "\n")
+                  failed <<- c(failed, rmd)
+                }
+              )
+              setwd(old_wd)
+            }
+            cat("\n=== summary ===\n")
+            cat("rendered:", length(rmds) - length(failed), "\n")
+            cat("failed:  ", length(failed), "\n")
+            if (length(failed) > 0) {
+              for (f in failed) cat("  ", f, "\n")
+              quit(status = 1)
+            }
+          '
+
+      # --- Containerised render: environment pinned by the project image ---
+      - name: Set up Buildx
+        if: steps.mode.outputs.backend == 'docker'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        if: steps.mode.outputs.backend == 'docker'
+        run: |
+          echo "Building computational environment..."
+          docker build -t compendium-env .
+
+      - name: Render all manuscripts (container)
+        if: steps.mode.outputs.backend == 'docker'
+        run: |
+          # Render as root: reports may \usepackage a LaTeX package the warm-up
+          # did not pre-bake, so tinytex installs it at render time, which writes
+          # to the root:staff TeX tree (tlpdb, format cache). The non-root run
+          # user cannot, so the batch render runs as root. Interactive 'make r'
+          # stays non-root.
+          docker run --rm --user root -e CI=true \
+            -v ${{ github.workspace }}:/project \
+            -w /project compendium-env \
+            Rscript --vanilla -e '
+              # PDF mode (LaTeX present, e.g. the verse/publishing base): let
+              # tinytex auto-install any LaTeX package the image did not pre-bake
+              # (the verse TeX tree is world-writable). Harmless for HTML output.
+              options(tinytex.install_packages = TRUE)
+              # renv::paths$library() is the authoritative package dir
+              # (.../R-x.y/<arch>); the older "*/*" glob stopped one level
+              # short (.../R-x.y) and missed restored packages. The "*/*/*"
+              # glob is a fallback with the correct depth.
+              baked_lib <- tryCatch(
+                renv::paths[["library"]](),
+                error = function(e) Sys.glob("/opt/renv/library/*/*/*")[1])
+              if (!is.na(baked_lib) && nzchar(baked_lib)) {
+                .libPaths(c(baked_lib, .libPaths()))
+              }
+              # Install the compendium package into the baked library so a
+              # report can library() it (reports commonly load the workspace
+              # package to use its R/ functions). Harmless when R/ is empty;
+              # errors are non-fatal so a report that does not need it still
+              # renders.
+              if (file.exists("DESCRIPTION")) {
+                tryCatch(
+                  install.packages(".", repos = NULL, type = "source"),
+                  error = function(e) cat("compendium self-install skipped:",
+                                          conditionMessage(e), "\n"))
+              }
+              rmds <- unique(c(
+                list.files("analysis", pattern = "^report[.]Rmd$",
+                           recursive = TRUE, full.names = TRUE),
+                list.files("analysis/posts", pattern = "[.]Rmd$",
+                           full.names = TRUE)
+              ))
+              cat("Found", length(rmds), "manuscripts to render\n\n")
+              failed <- character()
+              for (rmd in rmds) {
+                cat("=== Rendering:", rmd, "===\n")
+                old_wd <- setwd(dirname(rmd))
+                tryCatch(
+                  rmarkdown::render(basename(rmd), envir = new.env(), output_format = if (nzchar(Sys.which("pdflatex"))) NULL else "html_document"),
+                  error = function(e) {
+                    cat("FAILED:", conditionMessage(e), "\n")
+                    failed <<- c(failed, rmd)
+                  }
+                )
+                setwd(old_wd)
+              }
+              cat("\n=== summary ===\n")
+              cat("rendered:", length(rmds) - length(failed), "\n")
+              cat("failed:  ", length(failed), "\n")
+              if (length(failed) > 0) {
+                for (f in failed) cat("  ", f, "\n")
+                quit(status = 1)
+              }
+            '
+
+      # --- Book archetype: render the whole Quarto book PROJECT (multi-chapter,
+      # driven by analysis/report/_quarto.yml), not a single report.Rmd. This is
+      # the render-gate generalisation the 'blog' archetype comment also flags:
+      # one project-level `quarto render` instead of per-file rmarkdown::render.
+      # Runs only when the book config exists. Container backend only for now,
+      # since the project image (publishing/verse base) ships quarto; extending
+      # to the nix and host backends requires quarto in those environments
+      # (plan §9.4 follow-up). The baked renv library is put on .libPaths() for
+      # the R sessions quarto spawns (which run outside the project root, in
+      # analysis/report/) via the Rprofile.site shim baked by modules/docker.sh.
+      - name: Render Quarto book (container)
+        if: steps.mode.outputs.backend == 'docker' && hashFiles('analysis/report/_quarto.yml') != ''
+        run: |
+          # Render HTML only. A book often declares an html+pdf format, but the
+          # PDF path pulls in LaTeX (luatex), which fails in CI on missing figure
+          # PDFs, fonts, or unbaked packages. The deploy serves HTML, so the
+          # render gate only needs HTML here. Build the PDF locally with
+          # `make docker-render-book`, which renders every declared format.
+          docker run --rm --user root -e CI=true \
+            -v ${{ github.workspace }}:/project \
+            -w /project compendium-env \
+            quarto render analysis/report --to html
+
+      # Blog archetype (and any Quarto index.qmd report): render the single-post
+      # Quarto document. Runs only when analysis/report/index.qmd exists, so
+      # manuscript/analysis projects that carry report.Rmd are unaffected. A
+      # book also has index.qmd (its preface), so skip when the book project
+      # config is present: the whole-book render above already covers it.
+      - name: Render Quarto report index.qmd (container)
+        if: steps.mode.outputs.backend == 'docker' && hashFiles('analysis/report/index.qmd') != '' && hashFiles('analysis/report/_quarto.yml') == ''
+        run: |
+          docker run --rm --user root -e CI=true \
+            -v ${{ github.workspace }}:/project \
+            -w /project compendium-env \
+            quarto render analysis/report/index.qmd --to html
+
+      # --- Host render: no Dockerfile; renv pins packages when present ---
+      - name: Set up pandoc
+        if: steps.mode.outputs.backend == 'host'
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Set up R
+        if: steps.mode.outputs.backend == 'host'
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Restore or install packages (host)
+        if: steps.mode.outputs.backend == 'host'
+        run: |
+          if [ -f renv.lock ]; then
+            echo "Restoring packages from renv.lock..."
+            Rscript -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+            Rscript -e "renv::restore(prompt = FALSE)"
+          else
+            echo "No renv.lock; installing dependencies from DESCRIPTION via pak..."
+            Rscript -e "install.packages('pak', repos = 'https://cloud.r-project.org')"
+            Rscript -e "pak::local_install_deps(root = '.', dependencies = TRUE)"
+          fi
+          Rscript -e "if (!requireNamespace('rmarkdown', quietly = TRUE)) install.packages('rmarkdown', repos = 'https://cloud.r-project.org')"
+
+      - name: Render all manuscripts (host)
+        if: steps.mode.outputs.backend == 'host'
+        run: |
+          Rscript -e '
+            rmds <- unique(c(
+              list.files("analysis", pattern = "^report[.]Rmd$",
+                         recursive = TRUE, full.names = TRUE),
+              list.files("analysis/posts", pattern = "[.]Rmd$",
+                         full.names = TRUE)
+            ))
+            cat("Found", length(rmds), "manuscripts to render\n\n")
+            failed <- character()
+            for (rmd in rmds) {
+              cat("=== Rendering:", rmd, "===\n")
+              old_wd <- setwd(dirname(rmd))
+              tryCatch(
+                rmarkdown::render(basename(rmd), envir = new.env(), output_format = if (nzchar(Sys.which("pdflatex"))) NULL else "html_document"),
+                error = function(e) {
+                  cat("FAILED:", conditionMessage(e), "\n")
+                  failed <<- c(failed, rmd)
+                }
+              )
+              setwd(old_wd)
+            }
+            cat("\n=== summary ===\n")
+            cat("rendered:", length(rmds) - length(failed), "\n")
+            cat("failed:  ", length(failed), "\n")
+            if (length(failed) > 0) {
+              for (f in failed) cat("  ", f, "\n")
+              quit(status = 1)
+            }
+          '
+
+      - name: Upload rendered reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-reports
+          path: |
+            analysis/**/*.pdf
+            analysis/**/*.html
+          retention-days: 30
+          if-no-files-found: warn

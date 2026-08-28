@@ -1,0 +1,7 @@
+# Project-specific zzcollab configuration
+# Overrides user config (~/.zzcollab/config.yaml)
+# Commit this file to version control.
+docker:
+  default_profile: analysis
+defaults:
+  profile_name: analysis

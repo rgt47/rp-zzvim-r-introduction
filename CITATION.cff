@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this research compendium, please cite it as below."
+type: software
+title: "rpzzvimrintroduction"
+version: 0.1.0
+date-released: "2026-08-28"
+license: GPL-3
+authors:
+  - family-names: Thomas
+    given-names: Ronald G.
+    orcid: ""
+    email: rgthomas@ucsd.edu
+    affiliation: Your Institution
+abstract: >
+  Reproducible research compendium created with zzcollab v0.3.0.
+  Contains all data, code, and computational environment needed to reproduce
+  the analyses.
+keywords:
+  - reproducible-research
+  - research-compendium

@@ -1,0 +1,503 @@
+# ============================================================================
+# zzvim-R .Rprofile.local v1.9.0
+# ============================================================================
+# Unified Graphics System - Plots and Tables
+# Display plots and tables in kitty terminal with unified history.
+# Architecture: PDF master + PNG preview for both plots and tables.
+#
+# Version history:
+#   v1.9.0 (2026-02): Unified graphics system - plots + tables
+#   v1.8.0 (2026-01): Plot HUD path resolution fix
+#   v1.7.0 (2026-01): Simplified architecture - PDF master + PNG preview
+
+# ============================================================================
+# Terminal Detection
+# ============================================================================
+.terminal_type <- function() {
+  if (Sys.getenv("KITTY_WINDOW_ID") != "") return("kitty")
+  if (Sys.getenv("GHOSTTY_RESOURCES_DIR") != "" ||
+      Sys.getenv("TERM") == "xterm-ghostty") return("kitty")
+  if (Sys.getenv("WEZTERM_EXECUTABLE") != "" ||
+      grepl("WezTerm", Sys.getenv("TERM_PROGRAM"), ignore.case = TRUE)) return("kitty")
+  if (Sys.getenv("ITERM_SESSION_ID") != "" ||
+      grepl("iTerm", Sys.getenv("TERM_PROGRAM"), ignore.case = TRUE)) return("iterm2")
+  "none"
+}
+
+.is_docker <- function() {
+  Sys.getenv("ZZCOLLAB_CONTAINER") == "true"
+}
+
+.terminal <- .terminal_type()
+
+if (.terminal != "none" && Sys.info()["sysname"] %in% c("Darwin", "Linux")) {
+
+  # ==========================================================================
+  # Configuration
+  # ==========================================================================
+  .plot_width <- 6
+  .plot_height <- 4.5
+  .png_scale <- 150
+  .table_png_density <- 150
+  .graphics_dir <- ".graphics"
+  .history_limit <- 50
+
+  # ==========================================================================
+  # Helper Functions
+  # ==========================================================================
+  .ensure_dirs <- function() {
+    if (!dir.exists(.graphics_dir)) dir.create(.graphics_dir, showWarnings = FALSE)
+    hist_dir <- file.path(.graphics_dir, "history")
+    if (!dir.exists(hist_dir)) dir.create(hist_dir, showWarnings = FALSE)
+  }
+
+  .signal_vim <- function() {
+    writeLines(as.character(Sys.time()), file.path(.graphics_dir, ".signal"))
+  }
+
+  .current_pdf <- function() file.path(.graphics_dir, "current.pdf")
+  .current_png <- function() file.path(.graphics_dir, "current.png")
+  .history_dir <- function() file.path(.graphics_dir, "history")
+  .history_index <- function() file.path(.history_dir(), "index.json")
+
+  # ==========================================================================
+  # JSON Helpers (using jsonlite)
+  # ==========================================================================
+  .jsonlite_ok <- requireNamespace("jsonlite", quietly = TRUE)
+  if (!.jsonlite_ok && interactive()) {
+    message("Install 'jsonlite' for graphics history: install.packages('jsonlite')")
+  }
+
+  .read_index <- function() {
+    if (!.jsonlite_ok) return(list(graphics = list(), current = 0, counter = 0))
+    idx_file <- .history_index()
+    if (!file.exists(idx_file)) return(list(graphics = list(), current = 0, counter = 0))
+    tryCatch(
+      jsonlite::fromJSON(idx_file, simplifyVector = FALSE),
+      error = function(e) list(graphics = list(), current = 0, counter = 0)
+    )
+  }
+
+  .write_index <- function(index) {
+    if (!.jsonlite_ok) return(invisible(NULL))
+    .ensure_dirs()
+    tryCatch(
+      jsonlite::write_json(index, .history_index(), auto_unbox = TRUE, pretty = TRUE),
+      error = function(e) NULL
+    )
+  }
+
+  # ==========================================================================
+  # Core: show_plot() - Display ggplot or base R plot
+  # ==========================================================================
+  show_plot <- function(expr, .name = NULL, .save = TRUE) {
+    .ensure_dirs()
+
+    plot_call <- substitute(expr)
+    plot_env <- parent.frame()
+    code_str <- paste(deparse(plot_call, width.cutoff = 500), collapse = " ")
+
+    .eval_plot <- function() {
+      result <- eval(plot_call, envir = plot_env)
+      if (inherits(result, "ggplot")) print(result)
+      invisible(result)
+    }
+
+    pdf(.current_pdf(), width = .plot_width, height = .plot_height)
+    .eval_plot()
+    dev.off()
+
+    png(.current_png(),
+        width = .plot_width * .png_scale,
+        height = .plot_height * .png_scale)
+    .eval_plot()
+    dev.off()
+
+    .signal_vim()
+
+    if (.save) .add_to_history(.name, type = "plot", code = code_str)
+
+    invisible(NULL)
+  }
+
+  assign("show_plot", show_plot, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Core: show_table() - Display t2f table
+  # ==========================================================================
+  show_table <- function(x, .name = NULL, .save = TRUE, ...) {
+    if (!requireNamespace("zztab2fig", quietly = TRUE)) {
+      stop("zztab2fig package required for show_table()")
+    }
+
+    .ensure_dirs()
+
+    code_str <- paste(deparse(substitute(x), width.cutoff = 500), collapse = " ")
+
+    index <- .read_index()
+    if (is.null(.name)) {
+      .name <- sprintf("table_%03d", index$counter + 1)
+    }
+    safe_name <- gsub("[^a-zA-Z0-9_-]", "_", .name)
+
+    tmp_dir <- file.path(.graphics_dir, "tmp")
+    if (!dir.exists(tmp_dir)) dir.create(tmp_dir, showWarnings = FALSE)
+
+    pdf_path <- zztab2fig::t2f(x, filename = safe_name, sub_dir = tmp_dir, ...)
+
+    file.copy(pdf_path, .current_pdf(), overwrite = TRUE)
+
+    tex_path <- file.path(tmp_dir, paste0(safe_name, ".tex"))
+
+    convert_cmd <- sprintf("convert -density %d %s %s 2>/dev/null",
+                           .table_png_density,
+                           shQuote(.current_pdf()),
+                           shQuote(.current_png()))
+    system(convert_cmd)
+
+    .signal_vim()
+
+    if (.save) {
+      .add_to_history(.name, type = "table", code = code_str, tex_src = tex_path)
+    }
+
+    unlink(file.path(tmp_dir, paste0(safe_name, "_full.pdf")))
+
+    invisible(NULL)
+  }
+
+  assign("show_table", show_table, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Core: show() - Display last graphic or explicit object
+  # ==========================================================================
+  show <- function(expr = NULL) {
+    if (missing(expr) || is.null(expr)) {
+      index <- .read_index()
+      if (index$current > 0 && length(index$graphics) > 0) {
+        entry <- Filter(function(g) g$id == index$current, index$graphics)
+        if (length(entry) > 0) {
+          .display_from_history(entry[[1]])
+        }
+      } else {
+        cat("No graphics in history. Use show_plot() or show_table().\n")
+      }
+    } else {
+      plot_call <- substitute(expr)
+      result <- eval(plot_call, envir = parent.frame())
+      if (inherits(result, "ggplot")) {
+        show_plot(result)
+      } else if (is.data.frame(result) || is.matrix(result)) {
+        show_table(result)
+      } else {
+        show_plot(result)
+      }
+    }
+    invisible(NULL)
+  }
+
+  assign("show", show, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # History Management
+  # ==========================================================================
+  .add_to_history <- function(name = NULL, type = "plot", code = "", tex_src = NULL) {
+    index <- .read_index()
+    index$counter <- index$counter + 1
+    id <- index$counter
+
+    if (is.null(name) || name == "") {
+      name <- sprintf("%s_%03d", type, id)
+    }
+    safe_name <- gsub("[^a-zA-Z0-9_-]", "_", name)
+
+    hist_dir <- .history_dir()
+    pdf_dst <- file.path(hist_dir, sprintf("%03d_%s.pdf", id, safe_name))
+    png_dst <- file.path(hist_dir, sprintf("%03d_%s.png", id, safe_name))
+
+    if (file.exists(.current_pdf())) file.copy(.current_pdf(), pdf_dst, overwrite = TRUE)
+    if (file.exists(.current_png())) file.copy(.current_png(), png_dst, overwrite = TRUE)
+
+    entry <- list(
+      id = id,
+      type = type,
+      name = name,
+      pdf = basename(pdf_dst),
+      png = basename(png_dst),
+      created = format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+      code = substr(code, 1, 200)
+    )
+
+    if (!is.null(tex_src) && file.exists(tex_src)) {
+      tex_dst <- file.path(hist_dir, sprintf("%03d_%s.tex", id, safe_name))
+      file.copy(tex_src, tex_dst, overwrite = TRUE)
+      entry$tex <- basename(tex_dst)
+    }
+
+    index$graphics <- c(index$graphics, list(entry))
+    index$current <- id
+
+    .write_index(index)
+    .trim_history()
+
+    invisible(id)
+  }
+
+  .trim_history <- function() {
+    index <- .read_index()
+    if (length(index$graphics) <= .history_limit) return()
+
+    n_remove <- length(index$graphics) - .history_limit
+    to_remove <- index$graphics[1:n_remove]
+    index$graphics <- index$graphics[(n_remove + 1):length(index$graphics)]
+
+    hist_dir <- .history_dir()
+    for (entry in to_remove) {
+      for (f in c(entry$pdf, entry$png, entry$tex)) {
+        if (!is.null(f)) {
+          fpath <- file.path(hist_dir, f)
+          if (file.exists(fpath)) unlink(fpath)
+        }
+      }
+    }
+
+    .write_index(index)
+  }
+
+  # ==========================================================================
+  # Navigation
+  # ==========================================================================
+  .display_from_history <- function(entry) {
+    hist_dir <- .history_dir()
+    png_file <- file.path(hist_dir, entry$png)
+
+    if (!file.exists(png_file)) {
+      cat("Graphics file not found\n")
+      return(invisible(NULL))
+    }
+
+    file.copy(png_file, .current_png(), overwrite = TRUE)
+    pdf_file <- file.path(hist_dir, entry$pdf)
+    if (file.exists(pdf_file)) {
+      file.copy(pdf_file, .current_pdf(), overwrite = TRUE)
+    }
+
+    .signal_vim()
+    type_tag <- if (entry$type == "plot") "[P]" else "[T]"
+    cat(sprintf("%s %s (%s)\n", type_tag, entry$name, entry$created))
+  }
+
+  show_prev <- function() {
+    index <- .read_index()
+    if (length(index$graphics) == 0) {
+      cat("No graphics history\n")
+      return(invisible(NULL))
+    }
+
+    pos <- which(sapply(index$graphics, function(x) x$id) == index$current)
+    if (length(pos) == 0) pos <- length(index$graphics)
+
+    new_pos <- max(1, pos - 1)
+    entry <- index$graphics[[new_pos]]
+    index$current <- entry$id
+    .write_index(index)
+
+    cat(sprintf("[%d/%d] ", new_pos, length(index$graphics)))
+    .display_from_history(entry)
+  }
+
+  show_next <- function() {
+    index <- .read_index()
+    if (length(index$graphics) == 0) {
+      cat("No graphics history\n")
+      return(invisible(NULL))
+    }
+
+    pos <- which(sapply(index$graphics, function(x) x$id) == index$current)
+    if (length(pos) == 0) pos <- 0
+
+    new_pos <- min(length(index$graphics), pos + 1)
+    entry <- index$graphics[[new_pos]]
+    index$current <- entry$id
+    .write_index(index)
+
+    cat(sprintf("[%d/%d] ", new_pos, length(index$graphics)))
+    .display_from_history(entry)
+  }
+
+  show_goto <- function(name_or_id) {
+    index <- .read_index()
+    if (length(index$graphics) == 0) {
+      cat("No graphics history\n")
+      return(invisible(NULL))
+    }
+
+    entry <- NULL
+    if (is.numeric(name_or_id)) {
+      matches <- Filter(function(x) x$id == name_or_id, index$graphics)
+      if (length(matches) > 0) entry <- matches[[1]]
+    } else {
+      matches <- Filter(function(x) grepl(name_or_id, x$name, ignore.case = TRUE),
+                        index$graphics)
+      if (length(matches) > 0) entry <- matches[[1]]
+    }
+
+    if (is.null(entry)) {
+      cat("Graphics not found\n")
+      return(invisible(NULL))
+    }
+
+    index$current <- entry$id
+    .write_index(index)
+    .display_from_history(entry)
+  }
+
+  show_history <- function(type = NULL) {
+    index <- .read_index()
+    if (length(index$graphics) == 0) {
+      cat("No graphics history\n")
+      return(invisible(NULL))
+    }
+
+    items <- index$graphics
+    if (!is.null(type)) {
+      items <- Filter(function(x) x$type == type, items)
+    }
+
+    if (length(items) == 0) {
+      cat(sprintf("No %s in history\n", type))
+      return(invisible(NULL))
+    }
+
+    cat(sprintf("Graphics history: %d items\n\n", length(items)))
+    for (i in seq_along(items)) {
+      g <- items[[i]]
+      marker <- if (g$id == index$current) ">" else " "
+      type_tag <- if (g$type == "plot") "[P]" else "[T]"
+      cat(sprintf("%s %s %3d. %-20s %s\n", marker, type_tag, g$id, g$name, g$created))
+    }
+  }
+
+  show_search <- function(pattern) {
+    index <- .read_index()
+    if (length(index$graphics) == 0) {
+      cat("No graphics history\n")
+      return(invisible(NULL))
+    }
+
+    matches <- Filter(function(x) {
+      grepl(pattern, x$name, ignore.case = TRUE) ||
+      grepl(pattern, x$code, ignore.case = TRUE)
+    }, index$graphics)
+
+    if (length(matches) == 0) {
+      cat("No matches\n")
+      return(invisible(NULL))
+    }
+
+    cat(sprintf("Found %d:\n", length(matches)))
+    for (m in matches) {
+      type_tag <- if (m$type == "plot") "[P]" else "[T]"
+      cat(sprintf("  %s [%d] %s\n", type_tag, m$id, m$name))
+    }
+
+    entry <- matches[[1]]
+    index$current <- entry$id
+    .write_index(index)
+    cat("\n")
+    .display_from_history(entry)
+  }
+
+  assign("show_prev", show_prev, envir = .GlobalEnv)
+  assign("show_next", show_next, envir = .GlobalEnv)
+  assign("show_goto", show_goto, envir = .GlobalEnv)
+  assign("show_history", show_history, envir = .GlobalEnv)
+  assign("show_search", show_search, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Export Functions
+  # ==========================================================================
+  show_zoom <- function() {
+    pdf_file <- .current_pdf()
+    if (!file.exists(pdf_file)) {
+      cat("No graphics available. Use show_plot() or show_table() first.\n")
+      return(invisible(NULL))
+    }
+    if (.is_docker()) {
+      cat("In Docker: use <LocalLeader>] in Vim to open PDF\n")
+      return(invisible(NULL))
+    }
+    system2("open", pdf_file, wait = FALSE)
+    cat("Opened PDF (vector, zoomable)\n")
+  }
+
+  show_save <- function(filename) {
+    if (grepl("\\.pdf$", filename, ignore.case = TRUE)) {
+      if (file.exists(.current_pdf())) {
+        file.copy(.current_pdf(), filename, overwrite = TRUE)
+        cat("Saved:", filename, "(PDF)\n")
+      } else {
+        cat("No PDF available\n")
+      }
+    } else if (grepl("\\.png$", filename, ignore.case = TRUE)) {
+      if (file.exists(.current_png())) {
+        file.copy(.current_png(), filename, overwrite = TRUE)
+        cat("Saved:", filename, "(PNG)\n")
+      } else {
+        cat("No PNG available\n")
+      }
+    } else {
+      cat("Supported formats: .pdf, .png\n")
+    }
+  }
+
+  assign("show_zoom", show_zoom, envir = .GlobalEnv)
+  assign("show_save", show_save, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Rmd/Quarto Integration
+  # ==========================================================================
+  # For embedding graphics in Rmd/qmd documents (batch mode).
+  # Usage: t2f(model) |> graph_include()
+  graph_include <- function(path, out.width = "100%", ...) {
+    if (!requireNamespace("knitr", quietly = TRUE)) {
+      stop("knitr package required for graph_include()")
+    }
+    if (!file.exists(path)) {
+      stop("File not found: ", path)
+    }
+    knitr::include_graphics(path, ...)
+  }
+
+  assign("graph_include", graph_include, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Configuration
+  # ==========================================================================
+  set_plot_size <- function(width = 6, height = 4.5, png_scale = 150) {
+    assign(".plot_width", width, envir = .GlobalEnv)
+    assign(".plot_height", height, envir = .GlobalEnv)
+    assign(".png_scale", png_scale, envir = .GlobalEnv)
+    cat(sprintf("Plot size: %.1f x %.1f in (preview: %dx%d px)\n",
+        width, height, as.integer(width * png_scale),
+        as.integer(height * png_scale)))
+  }
+
+  assign("set_plot_size", set_plot_size, envir = .GlobalEnv)
+
+  # ==========================================================================
+  # Startup Message
+  # ==========================================================================
+  if (interactive()) {
+    cat(sprintf("Unified graphics: %s (PDF + PNG)\n", toupper(.terminal)))
+    cat("  show_plot(expr)   Display plot (ggplot or base R)\n")
+    cat("  show_table(x,...) Display table (via t2f)\n")
+    cat("  show()            Redisplay last graphic\n")
+    cat("  show_prev/next    Navigate history            SPC , / SPC .\n")
+    cat("  show_history()    List all graphics           SPC [\n")
+    cat("  show_zoom()       Open PDF in viewer          SPC ]\n")
+    cat("  show_save(file)   Export to file\n")
+    cat("  graph_include(p)  Embed in Rmd/qmd (batch mode)\n")
+    cat("\n")
+  }
+}
