@@ -6,7 +6,7 @@ categories: [vim, neovim, r, r-packages]
 description: "A 150-line proof of concept for sending R code from a Vim buffer to a terminal grew, over a year, into a publicly released plugin with context-aware submission, inline plots, and a Docker-aware workspace HUD."
 image: "media/images/hero.jpg"
 document-type: "blog"
-draft: true
+draft: false
 execute:
   echo: true
   warning: false
