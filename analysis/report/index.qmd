@@ -112,9 +112,9 @@ beyond R itself. It is closest in spirit to
 terminal-centric REPL bridge rather than a client-server
 integration like R.nvim or ESS. What sets it apart from
 vim-slime is R-specific intelligence built directly into the
-plugin: it parses the buffer well enough to recognize a
-function body, a pipe chain, or a control block and submit the
-whole unit on `<CR>`, rather than a single line. It does not
+plugin. It parses the buffer well enough to recognize a
+function body, a pipe chain, or a control block, and submits
+the whole unit on `<CR>` rather than a single line. It does not
 attempt to replace RStudio's viewer, R.nvim's object browser, or
 a GUI debugger. It is useful where the editing surface is
 already Vim or Neovim and staying there outweighs the
@@ -165,9 +165,9 @@ wherever it runs.*
 zzvim-R does not try to be everything. Against R.nvim (the
 Neovim-only, actively maintained successor to the archived
 Nvim-R), it gives up an object browser, richer completion, and
-inline help lookup in exchange for working identically in Vim
-and Neovim and for shipping the plot pipeline and Docker
-awareness R.nvim does not have. Against RStudio and VS Code, it
+inline help lookup. In exchange, it works identically in Vim
+and Neovim and ships the plot pipeline and Docker awareness
+R.nvim does not have. Against RStudio and VS Code, it
 gives up a graphical debugger, viewer pane, and polish in
 exchange for editing speed, a smaller footprint, and working the
 same way over SSH as it does locally. Against vim-slime, its
