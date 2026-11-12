@@ -1,4 +1,12 @@
-name: Render Blog Post (Simple)
+# zzcollab blog-render.yml v0.3.0 (zzcollab 988aa73)
+#
+# The single CI workflow for the blog archetype (one post per repository).
+# Builds the post's Docker image, restores renv.lock inside it, renders
+# analysis/report/index.qmd to HTML, and checks that the output is non-empty.
+# Blog posts carry no r-package.yml or render-report.yml: a post has no
+# package code to check, and this workflow is its render gate.
+#
+name: Render Blog Post
 
 on:
   workflow_dispatch:
@@ -15,100 +23,78 @@ on:
       - 'analysis/report/**'
       - 'renv.lock'
       - 'Dockerfile'
+      - '.github/workflows/blog-render.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   render-blog:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      # Step 1: Checkout code
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      # Step 2: Set up Docker Buildx
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
-      # Step 3: Build Docker image
       - name: Build Docker image
-        run: |
-          echo "Building computational environment..."
-          docker build -t blog-env .
-          echo "Docker image built successfully"
+        run: docker build -t blog-env .
 
-      # Step 4: Restore R packages from renv.lock
       - name: Restore R packages
+        timeout-minutes: 30
         run: |
-          echo "Restoring R packages from renv.lock..."
           docker run --rm \
             -v ${{ github.workspace }}:/home/analyst/project \
             -w /home/analyst/project \
             --user root \
             blog-env bash -c 'chown -R analyst:analyst /home/analyst/project && mkdir -p /home/analyst/project/renv && chown -R analyst:analyst /home/analyst/project/renv && su - analyst -c "cd /home/analyst/project && Rscript -e \"options(warn=1); renv::restore(prompt=FALSE)\"" 2>&1'
 
-      # Step 5: Render Quarto blog post
-      - name: Render Quarto report
+      - name: Render Quarto post
+        timeout-minutes: 30
         run: |
-          echo "Rendering Quarto blog post..."
           docker run --rm \
             -v ${{ github.workspace }}:/home/analyst/project \
             -w /home/analyst/project \
             --user root \
             blog-env bash -c 'chown -R analyst:analyst /home/analyst/project && su - analyst -c "cd /home/analyst/project && quarto render analysis/report/index.qmd --to html 2>&1" || { echo "Rendering failed - check code and image paths"; exit 1; }'
 
-      # Step 6: Verify rendered output
       - name: Verify rendered output
         run: |
-          echo "Checking rendered HTML..."
-          if [ -f "analysis/report/index.html" ]; then
-            SIZE=$(stat -c%s "analysis/report/index.html" 2>/dev/null || stat -f%z "analysis/report/index.html" 2>/dev/null)
-            if [ "$SIZE" -gt 1000 ]; then
-              echo "Blog post rendered successfully ($SIZE bytes)"
-              exit 0
-            else
-              echo "Rendered HTML is too small (likely empty)"
-              exit 1
-            fi
-          else
-            echo "Rendered HTML not found at analysis/report/index.html"
+          out=analysis/report/index.html
+          if [ ! -f "$out" ]; then
+            echo "::error::Rendered HTML not found at $out"
             exit 1
           fi
+          size=$(stat -c%s "$out")
+          if [ "$size" -le 1000 ]; then
+            echo "::error::Rendered HTML is too small ($size bytes)"
+            exit 1
+          fi
+          echo "Blog post rendered ($size bytes)"
 
-      # Step 7: Upload rendered report as artifact
-      - name: Upload rendered report
+      - name: Upload rendered post
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rendered-blog-post
           path: analysis/report/index.html
           retention-days: 30
+          if-no-files-found: warn
 
-      # Step 8: Create success summary
-      - name: Create success summary
-        if: success()
+      - name: Summary
+        if: always()
         run: |
-          echo "## Blog Post Rendered Successfully" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Output Location:** analysis/report/index.html" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**What was tested:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Docker environment built" >> $GITHUB_STEP_SUMMARY
-          echo "- R packages restored from renv.lock" >> $GITHUB_STEP_SUMMARY
-          echo "- Quarto document rendered to HTML" >> $GITHUB_STEP_SUMMARY
-          echo "- Output file verified" >> $GITHUB_STEP_SUMMARY
-
-      # Step 9: Create failure summary
-      - name: Create failure summary
-        if: failure()
-        run: |
-          echo "## Blog Post Rendering Failed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Possible issues:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. Syntax error in Quarto - Check analysis/report/index.qmd for YAML or markdown issues" >> $GITHUB_STEP_SUMMARY
-          echo "2. Missing images - Verify image paths are correct and files exist" >> $GITHUB_STEP_SUMMARY
-          echo "3. Missing packages - Check renv.lock has required packages" >> $GITHUB_STEP_SUMMARY
-          echo "4. R code error - Review R code in analysis/report/index.qmd" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Local debugging:**" >> $GITHUB_STEP_SUMMARY
-          echo "Run: make docker-run  # Start interactive session" >> $GITHUB_STEP_SUMMARY
-          echo "Then: cd analysis/report && quarto render index.qmd --to html" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" = success ]; then
+            echo "## Blog post rendered" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Blog post render failed"
+              echo ""
+              echo "Reproduce locally: \`make docker-run\`, then"
+              echo "\`cd analysis/report && quarto render index.qmd --to html\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
