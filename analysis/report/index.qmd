@@ -100,9 +100,6 @@ plugin sits today relative to the alternatives.
 
 ![ ](media/images/ambiance1.jpg){.img-fluid height=3.5in}
 
-*A single-purpose instrument that grew a small panel of
-readings around itself.*
-
 # What is zzvim-R?
 
 zzvim-R is a single VimScript implementation that targets both
@@ -146,9 +143,6 @@ all.
 
 ![ ](media/images/ambiance2.jpg){.img-fluid height=3.5in}
 
-*A plot resolving into view in the terminal pane, the way a
-print resolves in a developing tray.*
-
 The Docker integration answers the motivation above directly:
 zzvim-R detects a zzcollab-scaffolded project (via the
 `.zzcollab` marker file) and launches R inside the container
@@ -156,9 +150,6 @@ through `make r`, using the project's `renv` environment, rather
 than assuming a bare `R` on the host `$PATH`.
 
 ![ ](media/images/ambiance3.jpg){.img-fluid height=3.5in}
-
-*A self-contained unit that carries its own environment
-wherever it runs.*
 
 # How It Compares
 
